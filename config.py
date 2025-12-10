@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     
     # OpenAI Configuration
     openai_api_key: Optional[str] = None
+    openai_model: str = "gpt-3.5-turbo"
+    openai_fallback_model: str = "gpt-3.5-turbo"
+    max_context_tokens: int = 3000
+    max_total_tokens: int = 4000
     
     # Application Configuration
     log_level: str = "INFO"

@@ -8,6 +8,8 @@ from dataclasses import dataclass
 import openai
 from openai import OpenAI
 from config import settings
+from utils.exceptions import LLMServiceError, ErrorCode, ServiceUnavailableError
+from utils.error_handlers import CircuitBreaker, RetryHandler, log_performance_metric
 
 logger = logging.getLogger(__name__)
 
@@ -196,9 +198,11 @@ class LLMService:
         logger.info(f"Selected {len(selected_chunks)} chunks using ~{used_tokens} tokens")
         return selected_chunks
     
+    @CircuitBreaker(failure_threshold=3, recovery_timeout=60, expected_exception=openai.OpenAIError)
+    @RetryHandler(max_retries=2, retryable_exceptions=(openai.APITimeoutError, openai.APIConnectionError))
     def _make_api_call(self, prompt: str, model: str) -> Tuple[str, int]:
         """
-        Make API call to OpenAI
+        Make API call to OpenAI with circuit breaker and retry logic
         
         Args:
             prompt: The formatted prompt
@@ -208,9 +212,14 @@ class LLMService:
             Tuple of (response_text, tokens_used)
         """
         if not self.client:
-            raise RuntimeError("OpenAI client not initialized")
+            raise LLMServiceError(
+                message="OpenAI client not initialized - missing API key",
+                error_code=ErrorCode.LLM_SERVICE_UNAVAILABLE
+            )
         
         try:
+            start_time = time.time()
+            
             response = self.client.chat.completions.create(
                 model=model,
                 messages=[
@@ -222,6 +231,10 @@ class LLMService:
                 timeout=30.0
             )
             
+            # Log performance
+            duration_ms = int((time.time() - start_time) * 1000)
+            log_performance_metric("llm_api_call", duration_ms, {"model": model})
+            
             answer = response.choices[0].message.content
             tokens_used = response.usage.total_tokens if response.usage else 0
             
@@ -229,16 +242,44 @@ class LLMService:
             
         except openai.RateLimitError as e:
             logger.error(f"Rate limit exceeded: {e}")
-            raise
+            raise LLMServiceError(
+                message="Rate limit exceeded for LLM service. Please try again later.",
+                model_name=model,
+                error_code=ErrorCode.LLM_RATE_LIMIT,
+                original_exception=e
+            )
         except openai.APITimeoutError as e:
             logger.error(f"API timeout: {e}")
-            raise
+            raise LLMServiceError(
+                message="LLM service request timed out. Please try again.",
+                model_name=model,
+                error_code=ErrorCode.LLM_TIMEOUT,
+                original_exception=e
+            )
+        except openai.AuthenticationError as e:
+            logger.error(f"Authentication error: {e}")
+            raise LLMServiceError(
+                message="LLM service authentication failed. Please check API key configuration.",
+                model_name=model,
+                error_code=ErrorCode.LLM_SERVICE_UNAVAILABLE,
+                original_exception=e
+            )
         except openai.APIError as e:
             logger.error(f"OpenAI API error: {e}")
-            raise
+            raise LLMServiceError(
+                message=f"LLM service API error: {str(e)}",
+                model_name=model,
+                error_code=ErrorCode.LLM_API_ERROR,
+                original_exception=e
+            )
         except Exception as e:
             logger.error(f"Unexpected error in API call: {e}")
-            raise
+            raise LLMServiceError(
+                message=f"Unexpected error in LLM service: {str(e)}",
+                model_name=model,
+                error_code=ErrorCode.LLM_API_ERROR,
+                original_exception=e
+            )
     
     def generate_answer(self, question: str, context_chunks: List[ContextChunk]) -> LLMResponse:
         """
@@ -254,10 +295,16 @@ class LLMService:
         start_time = time.time()
         
         if not self.client:
-            raise RuntimeError("LLM service not properly initialized - missing API key")
+            raise LLMServiceError(
+                message="LLM service not properly initialized - missing API key",
+                error_code=ErrorCode.LLM_SERVICE_UNAVAILABLE
+            )
         
         if not question or not question.strip():
-            raise ValueError("Question cannot be empty")
+            raise LLMServiceError(
+                message="Question cannot be empty",
+                error_code=ErrorCode.INVALID_QUESTION
+            )
         
         # Select appropriate context chunks within token limits
         selected_chunks = self._select_context_chunks(context_chunks, question)

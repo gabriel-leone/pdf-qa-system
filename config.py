@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     max_context_tokens: int = 3000
     max_total_tokens: int = 4000
     
+    # Alternative API Configuration
+    open_router_api_key: Optional[str] = None
+    
     # Application Configuration
     log_level: str = "INFO"
     max_file_size_mb: int = 50

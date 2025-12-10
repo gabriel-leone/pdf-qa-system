@@ -9,6 +9,8 @@ from chromadb.config import Settings as ChromaSettings
 import numpy as np
 from models.document import Chunk, ChunkMetadata
 from config import settings
+from utils.exceptions import VectorStoreError, ServiceUnavailableError
+from utils.error_handlers import RetryHandler, CircuitBreaker, log_performance_metric
 
 logger = logging.getLogger(__name__)
 

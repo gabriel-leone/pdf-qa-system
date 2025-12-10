@@ -18,11 +18,16 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from models.document import Document, ProcessingStatus
-from services.pdf_processor import PDFProcessor, PDFProcessingError
-from services.text_chunker import TextChunker, TextChunkingError
+from services.pdf_processor import PDFProcessor
+from services.text_chunker import TextChunker
 from services.embedding_service import EmbeddingService
 from services.vector_store import VectorStoreInterface, create_vector_store
 from config import settings
+from utils.exceptions import (
+    DocumentProcessingError, PDFProcessingError, TextChunkingError,
+    EmbeddingError, VectorStoreError, FileHandlingError
+)
+from utils.error_handlers import log_processing_step, log_performance_metric
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +55,7 @@ class DocumentProcessingProgress:
     processing_end_time: Optional[datetime] = None
 
 
-class DocumentProcessingError(Exception):
-    """Exception raised when document processing fails"""
-    pass
+# DocumentProcessingError is now imported from utils.exceptions
 
 
 class DocumentService:

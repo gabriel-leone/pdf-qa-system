@@ -7,6 +7,8 @@ from typing import List, Dict, Optional, Tuple
 from sentence_transformers import SentenceTransformer
 import numpy as np
 from config import settings
+from utils.exceptions import EmbeddingError, ServiceUnavailableError
+from utils.error_handlers import RetryHandler, log_performance_metric
 
 logger = logging.getLogger(__name__)
 

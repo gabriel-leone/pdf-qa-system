@@ -9,6 +9,8 @@ from typing import List, Optional, Tuple
 from dataclasses import dataclass
 
 from models.document import Chunk, ChunkMetadata
+from utils.exceptions import TextChunkingError
+from utils.error_handlers import log_processing_step
 
 
 @dataclass
@@ -22,9 +24,7 @@ class ChunkingConfig:
     paragraph_boundary_preference: bool = True  # Prefer paragraph boundaries
 
 
-class TextChunkingError(Exception):
-    """Exception raised when text chunking fails"""
-    pass
+# TextChunkingError is now imported from utils.exceptions
 
 
 class TextChunker:

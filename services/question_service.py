@@ -9,6 +9,11 @@ from models.api import QuestionRequest, QuestionResponse
 from services.retrieval_service import RetrievalService
 from services.llm_service import LLMService, ContextChunk
 from services.embedding_service import EmbeddingService
+from utils.exceptions import (
+    QuestionProcessingError, ValidationError, ServiceUnavailableError,
+    ErrorCode, create_no_documents_error, create_llm_unavailable_error
+)
+from utils.error_handlers import log_processing_step, log_performance_metric
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +49,11 @@ class QuestionService:
         try:
             # Validate request
             if not request.question or not request.question.strip():
-                raise ValueError("Question cannot be empty")
+                raise ValidationError(
+                    message="Question cannot be empty",
+                    field_name="question",
+                    field_value=request.question
+                )
             
             # Determine language filter
             language_filter = None

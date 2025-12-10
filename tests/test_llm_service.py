@@ -219,7 +219,8 @@ class TestLLMService:
         """Test answer generation without API key"""
         service = LLMService(api_key=None)
         
-        with pytest.raises(RuntimeError, match="not properly initialized"):
+        from utils.exceptions import LLMServiceError
+        with pytest.raises(LLMServiceError, match="not properly initialized"):
             service.generate_answer("Question?", [])
     
     @patch('services.llm_service.OpenAI')
@@ -230,7 +231,8 @@ class TestLLMService:
         
         service = LLMService(api_key="test-key")
         
-        with pytest.raises(ValueError, match="Question cannot be empty"):
+        from utils.exceptions import LLMServiceError
+        with pytest.raises(LLMServiceError, match="Question cannot be empty"):
             service.generate_answer("", [])
     
     def test_generate_simple_answer(self):

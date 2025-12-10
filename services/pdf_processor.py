@@ -10,15 +10,13 @@ import pdfplumber
 from langdetect import detect, DetectorFactory
 from langdetect.lang_detect_exception import LangDetectException
 
+from utils.exceptions import PDFProcessingError
+from utils.error_handlers import log_processing_step, RetryHandler
+
 # Set seed for consistent language detection results
 DetectorFactory.seed = 0
 
 logger = logging.getLogger(__name__)
-
-
-class PDFProcessingError(Exception):
-    """Custom exception for PDF processing errors"""
-    pass
 
 
 class PDFProcessor:

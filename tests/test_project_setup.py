@@ -86,7 +86,7 @@ class TestProjectSetup:
         except ImportError as e:
             pytest.fail(f"Could not import logging configuration: {e}")
     
-    @given(st.text(min_size=1, max_size=100))
+    @given(st.text(min_size=1, max_size=100, alphabet=st.characters(blacklist_characters=['\x00'])))
     def test_environment_variable_handling(self, test_value):
         """Property test: Environment variables should be handled correctly"""
         # Test that config can handle various environment variable values

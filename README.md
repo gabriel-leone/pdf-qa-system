@@ -295,10 +295,3 @@ curl http://localhost:8000/health/detailed
 ├── docker-compose.yml  # Container orchestration
 └── requirements.txt    # Python dependencies
 ```
-
-## 📖 Documentation
-
-- **API Documentation**: Available at `/docs` when running
-- **Design Document**: `.kiro/specs/pdf-qa-system/design.md`
-- **Requirements**: `.kiro/specs/pdf-qa-system/requirements.md`
-- **Implementation Tasks**: `.kiro/specs/pdf-qa-system/tasks.md`

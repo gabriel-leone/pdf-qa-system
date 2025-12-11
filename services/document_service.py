@@ -22,6 +22,7 @@ from services.pdf_processor import PDFProcessor
 from services.text_chunker import TextChunker
 from services.embedding_service import EmbeddingService
 from services.vector_store import VectorStoreInterface, create_vector_store
+from services.language_validator import LanguageValidator
 from config import settings
 from utils.exceptions import (
     DocumentProcessingError, PDFProcessingError, TextChunkingError,
@@ -72,7 +73,8 @@ class DocumentService:
         vector_store: Optional[VectorStoreInterface] = None,
         pdf_processor: Optional[PDFProcessor] = None,
         text_chunker: Optional[TextChunker] = None,
-        embedding_service: Optional[EmbeddingService] = None
+        embedding_service: Optional[EmbeddingService] = None,
+        language_validator: Optional[LanguageValidator] = None
     ):
         """
         Initialize the document service with all required components.
@@ -92,6 +94,7 @@ class DocumentService:
         self.pdf_processor = pdf_processor or PDFProcessor()
         self.text_chunker = text_chunker or TextChunker()
         self.embedding_service = embedding_service or EmbeddingService()
+        self.language_validator = language_validator or LanguageValidator()
         
         # Progress tracking
         self.processing_progress: Dict[str, DocumentProcessingProgress] = {}
@@ -204,11 +207,26 @@ class DocumentService:
             
             text, language, confidence = self.pdf_processor.process_pdf(file_path)
             
-            # Update document with detected language
-            document.language = language
+            # Validate detected language
+            validation_result = self.language_validator.validate_document_language(text, language)
+            
+            if not validation_result.is_valid:
+                logger.warning(f"Language validation failed for {filename}: {validation_result.validation_errors}")
+                # Continue processing but log the issues
+                for error in validation_result.validation_errors:
+                    logger.warning(f"Language validation error: {error}")
+            
+            if validation_result.warnings:
+                for warning in validation_result.warnings:
+                    logger.warning(f"Language validation warning: {warning}")
+            
+            # Update document with validated language
+            document.language = validation_result.detected_language
             document.processing_status = ProcessingStatus.PROCESSING
             
-            logger.info(f"Extracted {len(text)} characters from {filename}, language: {language}")
+            logger.info(f"Extracted {len(text)} characters from {filename}, "
+                       f"language: {validation_result.detected_language} "
+                       f"(confidence: {validation_result.confidence_score:.2f})")
             
             # Step 2: Chunk the text
             logger.info(f"Chunking text for {filename}")
@@ -239,7 +257,27 @@ class DocumentService:
             for chunk, embedding in zip(chunks, embeddings):
                 chunk.embedding = embedding.tolist()
             
-            logger.info(f"Generated embeddings for {len(chunks)} chunks from {filename}")
+            # Validate embedding language consistency
+            chunk_texts = [chunk.content for chunk in chunks]
+            chunk_embeddings = [chunk.embedding for chunk in chunks]
+            embedding_validation = self.language_validator.validate_embedding_language_consistency(
+                chunk_texts, chunk_embeddings
+            )
+            
+            if not embedding_validation.is_valid:
+                logger.warning(f"Embedding validation issues for {filename}: {embedding_validation.validation_errors}")
+            
+            if embedding_validation.warnings:
+                for warning in embedding_validation.warnings:
+                    logger.warning(f"Embedding validation warning: {warning}")
+            
+            # Validate chunk language consistency
+            chunk_consistency = self.language_validator.validate_chunk_language_consistency(chunks)
+            if not chunk_consistency.is_valid:
+                logger.warning(f"Chunk language consistency issues for {filename}: {chunk_consistency.validation_errors}")
+            
+            logger.info(f"Generated embeddings for {len(chunks)} chunks from {filename} "
+                       f"(embedding validation confidence: {embedding_validation.confidence_score:.2f})")
             
             # Step 4: Store in vector database
             logger.info(f"Storing {len(chunks)} chunks in vector store for {filename}")

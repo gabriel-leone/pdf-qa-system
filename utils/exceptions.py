@@ -42,6 +42,11 @@ class ErrorCode(Enum):
     LLM_TIMEOUT = "LLM_TIMEOUT"
     QUESTION_PROCESSING_FAILED = "QUESTION_PROCESSING_FAILED"
     
+    # Language validation errors
+    LANGUAGE_VALIDATION_FAILED = "LANGUAGE_VALIDATION_FAILED"
+    UNSUPPORTED_LANGUAGE = "UNSUPPORTED_LANGUAGE"
+    LANGUAGE_DETECTION_FAILED = "LANGUAGE_DETECTION_FAILED"
+    
     # External service errors
     OPENAI_API_ERROR = "OPENAI_API_ERROR"
     VECTOR_DB_CONNECTION_ERROR = "VECTOR_DB_CONNECTION_ERROR"
@@ -424,4 +429,50 @@ def create_llm_unavailable_error(service_name: str = "OpenAI") -> LLMServiceErro
     return LLMServiceError(
         message=f"{service_name} service is currently unavailable. Please check your API configuration.",
         error_code=ErrorCode.LLM_SERVICE_UNAVAILABLE
+    )
+
+
+class LanguageValidationError(PDFQAException):
+    """Exception for language validation operations"""
+    
+    def __init__(
+        self,
+        message: str,
+        detected_language: Optional[str] = None,
+        expected_language: Optional[str] = None,
+        confidence_score: Optional[float] = None,
+        error_code: ErrorCode = ErrorCode.LANGUAGE_VALIDATION_FAILED,
+        original_exception: Optional[Exception] = None
+    ):
+        details = {}
+        if detected_language:
+            details["detected_language"] = detected_language
+        if expected_language:
+            details["expected_language"] = expected_language
+        if confidence_score is not None:
+            details["confidence_score"] = confidence_score
+        
+        super().__init__(
+            message=message,
+            error_code=error_code,
+            details=details,
+            original_exception=original_exception
+        )
+
+
+def create_unsupported_language_error(language: str) -> LanguageValidationError:
+    """Create an unsupported language error"""
+    return LanguageValidationError(
+        message=f"Language '{language}' is not supported. Supported languages: Portuguese (pt), English (en)",
+        detected_language=language,
+        error_code=ErrorCode.UNSUPPORTED_LANGUAGE
+    )
+
+
+def create_language_detection_failed_error(text_sample: str = "") -> LanguageValidationError:
+    """Create a language detection failed error"""
+    sample = text_sample[:50] + "..." if len(text_sample) > 50 else text_sample
+    return LanguageValidationError(
+        message=f"Failed to detect language for text: '{sample}'",
+        error_code=ErrorCode.LANGUAGE_DETECTION_FAILED
     )

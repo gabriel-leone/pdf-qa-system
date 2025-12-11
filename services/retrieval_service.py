@@ -8,6 +8,7 @@ from models.document import Chunk
 from models.question import Reference
 from services.vector_store import VectorStoreInterface
 from services.embedding_service import EmbeddingService
+from services.language_validator import LanguageValidator
 
 logger = logging.getLogger(__name__)
 
@@ -15,17 +16,20 @@ logger = logging.getLogger(__name__)
 class RetrievalService:
     """Service for semantic search and ranking of document chunks"""
     
-    def __init__(self, vector_store: VectorStoreInterface, embedding_service: EmbeddingService):
+    def __init__(self, vector_store: VectorStoreInterface, embedding_service: EmbeddingService,
+                 language_validator: Optional[LanguageValidator] = None):
         """
         Initialize the retrieval service
         
         Args:
             vector_store: Vector store for similarity search
             embedding_service: Service for generating embeddings
+            language_validator: Service for language validation
         """
         self.vector_store = vector_store
         self.embedding_service = embedding_service
-        self.min_relevance_threshold = 0.3  # Minimum relevance score to consider
+        self.language_validator = language_validator or LanguageValidator()
+        self.min_relevance_threshold = 0.0  # Minimum relevance score to consider
         self.max_chunks_per_document = 3    # Max chunks from same document
     
     def find_relevant_chunks(self, question: str, top_k: int = 10, 
@@ -49,10 +53,14 @@ class RetrievalService:
             logger.info(f"Generating embedding for question: {question[:50]}...")
             question_embedding = self.embedding_service.generate_embedding(question.strip())
             
-            # Prepare metadata filter
+            # Prepare metadata filter with language validation
             metadata_filter = None
-            if language_filter and language_filter in ["en", "pt"]:
-                metadata_filter = {"language": language_filter}
+            if language_filter:
+                if self.language_validator.is_language_supported(language_filter):
+                    metadata_filter = {"language": language_filter}
+                    logger.info(f"Applying language filter: {language_filter}")
+                else:
+                    logger.warning(f"Language filter '{language_filter}' not supported, searching all languages")
             
             # Perform similarity search
             logger.info(f"Searching for similar chunks (top_k={top_k})")

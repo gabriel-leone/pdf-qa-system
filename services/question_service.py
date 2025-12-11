@@ -9,6 +9,7 @@ from models.api import QuestionRequest, QuestionResponse
 from services.retrieval_service import RetrievalService
 from services.llm_service import LLMService, ContextChunk
 from services.embedding_service import EmbeddingService
+from services.language_validator import LanguageValidator
 from utils.exceptions import (
     QuestionProcessingError, ValidationError, ServiceUnavailableError,
     ErrorCode, create_no_documents_error, create_llm_unavailable_error
@@ -21,16 +22,19 @@ logger = logging.getLogger(__name__)
 class QuestionService:
     """Service for orchestrating question answering pipeline"""
     
-    def __init__(self, retrieval_service: RetrievalService, llm_service: LLMService):
+    def __init__(self, retrieval_service: RetrievalService, llm_service: LLMService, 
+                 language_validator: Optional[LanguageValidator] = None):
         """
         Initialize the question service
         
         Args:
             retrieval_service: Service for retrieving relevant chunks
             llm_service: Service for generating answers
+            language_validator: Service for language validation
         """
         self.retrieval_service = retrieval_service
         self.llm_service = llm_service
+        self.language_validator = language_validator or LanguageValidator()
         self.default_max_references = 5
         self.min_chunks_for_answer = 1  # Minimum chunks needed to generate answer
     
@@ -55,10 +59,29 @@ class QuestionService:
                     field_value=request.question
                 )
             
-            # Determine language filter
+            # Validate question language
+            question_validation = self.language_validator.validate_document_language(
+                request.question, request.language
+            )
+            
+            if not question_validation.is_valid:
+                logger.warning(f"Question language validation failed: {question_validation.validation_errors}")
+            
+            if question_validation.warnings:
+                for warning in question_validation.warnings:
+                    logger.warning(f"Question language warning: {warning}")
+            
+            # Determine language filter based on validation
             language_filter = None
+            detected_question_lang = question_validation.detected_language
+            
             if request.language and request.language != "auto":
-                language_filter = request.language
+                if self.language_validator.is_language_supported(request.language):
+                    language_filter = request.language
+                else:
+                    logger.warning(f"Requested language '{request.language}' not supported, using auto-detection")
+                    if detected_question_lang in self.language_validator.get_supported_languages():
+                        language_filter = detected_question_lang
             
             # Determine max references
             max_references = request.max_references or self.default_max_references
@@ -71,6 +94,18 @@ class QuestionService:
                 top_k=max_references * 2,  # Get more chunks for better context selection
                 language_filter=language_filter
             )
+            
+            # Validate cross-language search capabilities
+            if chunks_with_scores:
+                cross_lang_validation = self.language_validator.validate_cross_language_search(
+                    detected_question_lang, chunks_with_scores
+                )
+                
+                if not cross_lang_validation.search_successful:
+                    logger.warning(f"Cross-language search issues: {cross_lang_validation.issues}")
+                
+                logger.info(f"Cross-language search found languages: {cross_lang_validation.languages_found}, "
+                           f"consistency score: {cross_lang_validation.consistency_score:.2f}")
             
             # Step 2: Check if we have enough relevant content
             if not chunks_with_scores or len(chunks_with_scores) < self.min_chunks_for_answer:
@@ -212,10 +247,20 @@ class QuestionService:
             else:
                 embedding_list = embedding
             
+            # Validate the question language if not auto
+            if language != "auto":
+                validation_result = self.language_validator.validate_document_language(question_text, language)
+                if not validation_result.is_valid:
+                    logger.warning(f"Question language validation failed: {validation_result.validation_errors}")
+                # Use detected language if validation suggests a different one
+                final_language = validation_result.detected_language if validation_result.confidence_score > 0.7 else language
+            else:
+                final_language = language
+            
             question = Question(
                 text=question_text,
                 embedding=embedding_list,
-                language=language
+                language=final_language
             )
             
             return question

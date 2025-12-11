@@ -1,11 +1,12 @@
 """
-LLM integration service for the PDF Q&A System
+LLM integration service for the PDF Q&A System using OpenRouter
 """
 import logging
 import time
+import json
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
-import openai
+import requests
 from openai import OpenAI
 from config import settings
 from utils.exceptions import LLMServiceError, ErrorCode, ServiceUnavailableError
@@ -109,37 +110,35 @@ Please make sure you have uploaded documents that contain information related to
 
 
 class LLMService:
-    """Service for LLM integration with OpenAI API"""
+    """Service for LLM integration with OpenRouter API"""
     
-    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-3.5-turbo"):
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         """
         Initialize the LLM service
         
         Args:
-            api_key: OpenAI API key (if None, will use settings.openai_api_key)
-            model: OpenAI model to use
+            api_key: OpenRouter API key (if None, will use settings.openrouter_api_key)
+            model: Model to use (if None, will use settings.llm_model)
         """
-        self.api_key = api_key or settings.openai_api_key
-        self.model = model
-        self.fallback_model = "gpt-3.5-turbo"  # Fallback if primary model fails
-        self.max_context_tokens = 3000  # Conservative limit for context
-        self.max_total_tokens = 4000   # Total token limit including response
-        self.client: Optional[OpenAI] = None
+        self.api_key = api_key or settings.openrouter_api_key
+        self.model = model or settings.llm_model
+        self.fallback_model = settings.llm_fallback_model
+        self.max_context_tokens = settings.max_context_tokens
+        self.max_total_tokens = settings.max_total_tokens
+        self.base_url = "https://openrouter.ai/api/v1/chat/completions"
+        self.timeout = 30.0
         
         self._initialize_client()
     
     def _initialize_client(self) -> None:
-        """Initialize the OpenAI client"""
+        """Initialize the OpenRouter client"""
         try:
             if self.api_key:
-                self.client = OpenAI(api_key=self.api_key)
-                logger.info(f"OpenAI client initialized with model: {self.model}")
+                logger.info(f"OpenRouter client initialized with model: {self.model}")
             else:
-                self.client = None
-                logger.warning("No API key provided, client not initialized")
+                logger.warning("No OpenRouter API key provided, client not initialized")
         except Exception as e:
-            logger.error(f"Failed to initialize OpenAI client: {e}")
-            self.client = None
+            logger.error(f"Failed to initialize OpenRouter client: {e}")
     
     def _select_context_chunks(self, chunks: List[ContextChunk], question: str) -> List[ContextChunk]:
         """
@@ -198,11 +197,11 @@ class LLMService:
         logger.info(f"Selected {len(selected_chunks)} chunks using ~{used_tokens} tokens")
         return selected_chunks
     
-    @CircuitBreaker(failure_threshold=3, recovery_timeout=60, expected_exception=openai.OpenAIError)
-    @RetryHandler(max_retries=2, retryable_exceptions=(openai.APITimeoutError, openai.APIConnectionError))
+    @CircuitBreaker(failure_threshold=3, recovery_timeout=60, expected_exception=Exception)
+    @RetryHandler(max_retries=2, retryable_exceptions=(requests.exceptions.Timeout, requests.exceptions.ConnectionError))
     def _make_api_call(self, prompt: str, model: str) -> Tuple[str, int]:
         """
-        Make API call to OpenAI with circuit breaker and retry logic
+        Make API call to OpenRouter with circuit breaker and retry logic
         
         Args:
             prompt: The formatted prompt
@@ -211,44 +210,80 @@ class LLMService:
         Returns:
             Tuple of (response_text, tokens_used)
         """
-        if not self.client:
+        if not self.api_key:
             raise LLMServiceError(
-                message="OpenAI client not initialized - missing API key",
+                message="OpenRouter API key not configured",
                 error_code=ErrorCode.LLM_SERVICE_UNAVAILABLE
             )
         
         try:
             start_time = time.time()
             
-            response = self.client.chat.completions.create(
-                model=model,
-                messages=[
+            # Prepare the request payload
+            payload = {
+                "model": model,
+                "messages": [
                     {"role": "system", "content": PromptTemplate.SYSTEM_PROMPT},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=1000,
-                temperature=0.1,  # Low temperature for more consistent answers
-                timeout=30.0
+                "max_tokens": 1000,
+                "temperature": 0.1,  # Low temperature for more consistent answers
+            }
+            
+            # Prepare headers
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://github.com/pdf-qa-system",  # Optional: for OpenRouter analytics
+                "X-Title": "PDF Q&A System"  # Optional: for OpenRouter analytics
+            }
+            
+            # Make the API call
+            response = requests.post(
+                url=self.base_url,
+                headers=headers,
+                data=json.dumps(payload),
+                timeout=self.timeout
             )
             
             # Log performance
             duration_ms = int((time.time() - start_time) * 1000)
             log_performance_metric("llm_api_call", duration_ms, {"model": model})
             
-            answer = response.choices[0].message.content
-            tokens_used = response.usage.total_tokens if response.usage else 0
+            # Handle response
+            if response.status_code == 200:
+                response_data = response.json()
+                answer = response_data["choices"][0]["message"]["content"]
+                tokens_used = response_data.get("usage", {}).get("total_tokens", 0)
+                return answer, tokens_used
+            else:
+                # Handle error responses
+                error_data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+                error_message = error_data.get("error", {}).get("message", f"HTTP {response.status_code}")
+                
+                if response.status_code == 429:
+                    logger.error(f"Rate limit exceeded: {error_message}")
+                    raise LLMServiceError(
+                        message="Rate limit exceeded for LLM service. Please try again later.",
+                        model_name=model,
+                        error_code=ErrorCode.LLM_RATE_LIMIT
+                    )
+                elif response.status_code == 401:
+                    logger.error(f"Authentication error: {error_message}")
+                    raise LLMServiceError(
+                        message="LLM service authentication failed. Please check OpenRouter API key configuration.",
+                        model_name=model,
+                        error_code=ErrorCode.LLM_SERVICE_UNAVAILABLE
+                    )
+                else:
+                    logger.error(f"OpenRouter API error: {error_message}")
+                    raise LLMServiceError(
+                        message=f"LLM service API error: {error_message}",
+                        model_name=model,
+                        error_code=ErrorCode.LLM_API_ERROR
+                    )
             
-            return answer, tokens_used
-            
-        except openai.RateLimitError as e:
-            logger.error(f"Rate limit exceeded: {e}")
-            raise LLMServiceError(
-                message="Rate limit exceeded for LLM service. Please try again later.",
-                model_name=model,
-                error_code=ErrorCode.LLM_RATE_LIMIT,
-                original_exception=e
-            )
-        except openai.APITimeoutError as e:
+        except requests.exceptions.Timeout as e:
             logger.error(f"API timeout: {e}")
             raise LLMServiceError(
                 message="LLM service request timed out. Please try again.",
@@ -256,18 +291,18 @@ class LLMService:
                 error_code=ErrorCode.LLM_TIMEOUT,
                 original_exception=e
             )
-        except openai.AuthenticationError as e:
-            logger.error(f"Authentication error: {e}")
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"Connection error: {e}")
             raise LLMServiceError(
-                message="LLM service authentication failed. Please check API key configuration.",
+                message="Failed to connect to LLM service. Please check your internet connection.",
                 model_name=model,
                 error_code=ErrorCode.LLM_SERVICE_UNAVAILABLE,
                 original_exception=e
             )
-        except openai.APIError as e:
-            logger.error(f"OpenAI API error: {e}")
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error: {e}")
             raise LLMServiceError(
-                message=f"LLM service API error: {str(e)}",
+                message="Invalid response from LLM service.",
                 model_name=model,
                 error_code=ErrorCode.LLM_API_ERROR,
                 original_exception=e
@@ -294,9 +329,9 @@ class LLMService:
         """
         start_time = time.time()
         
-        if not self.client:
+        if not self.api_key:
             raise LLMServiceError(
-                message="LLM service not properly initialized - missing API key",
+                message="LLM service not properly initialized - missing OpenRouter API key",
                 error_code=ErrorCode.LLM_SERVICE_UNAVAILABLE
             )
         
@@ -369,7 +404,7 @@ class LLMService:
     
     def is_available(self) -> bool:
         """Check if the LLM service is available"""
-        return self.client is not None and self.api_key is not None
+        return self.api_key is not None
     
     def get_model_info(self) -> Dict[str, str]:
         """Get information about the configured models"""
